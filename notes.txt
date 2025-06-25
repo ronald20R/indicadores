@@ -1,0 +1,5 @@
+pip freeze > requirements.txt
+
+pyinstaller run_script.spec
+
+py .\manage.py showmigrations modelos
