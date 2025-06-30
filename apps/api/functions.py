@@ -11,40 +11,36 @@ from rest_framework import status
 
 
 from apps.modelos.models import Plazos, Carga, TramitesMensual, MateriaDelito, CargaTotal, CargaSiatf,PlazosDetalle
-#plazos detallado
 
 @transaction.atomic
 def procesar_archivo_plazos_detallado(file, dependencia):
     try:
-        filename = file.name.lower()
-        if filename.endswith('.csv'):
-            file.seek(0)
-            raw_data = file.read()
-            detected = chardet.detect(raw_data)
-            encoding_detected = detected['encoding'] or 'utf-8'
-            
+        file.seek(0)
+        raw_data = file.read()
+        detected = chardet.detect(raw_data)
+        encoding_detected = detected['encoding'] or 'latin1'
+
+        # Intentar diferentes codificaciones si la primera falla
+        encodings_to_try = [encoding_detected, 'utf-8', 'latin1', 'cp1252', 'iso-8859-1', 'windows-1252']
+        
+        df = None
+        for encoding in encodings_to_try:
             try:
-                decoded_data = raw_data.decode(encoding_detected, errors='replace')
+                # Intentar decodificar sin reemplazar caracteres
+                decoded_data = raw_data.decode(encoding)
                 df = pd.read_csv(io.StringIO(decoded_data), sep=',', on_bad_lines='skip')
-            except Exception as e:
-                # Si falla con el encoding detectado, intentar con utf-8
-                try:
-                    decoded_data = raw_data.decode('utf-8', errors='replace')
-                    df = pd.read_csv(io.StringIO(decoded_data), sep=',', on_bad_lines='skip')
-                except Exception as e2:
-                    # Si también falla, intentar con latin1
-                    decoded_data = raw_data.decode('latin1', errors='replace')
-                    df = pd.read_csv(io.StringIO(decoded_data), sep=',', on_bad_lines='skip')
-        else:
-            excel_df = pd.read_excel(file)
-            csv_buffer = io.StringIO()
-            excel_df.to_csv(csv_buffer, index=False, encoding='utf-8')
-            csv_buffer.seek(0)
-            df = pd.read_csv(csv_buffer)
+                break
+            except UnicodeDecodeError:
+                continue
+            except Exception:
+                continue
+        
+        if df is None:
+            return False, 'No se pudo leer el archivo con ninguna codificación conocida'
 
         df.columns = df.columns.str.strip()
         
-        # Limpiar datos preservando caracteres especiales como ñ
+        # Limpiar datos - manejar caracteres especiales correctamente
         df['fiscal'] = df['fiscal'].astype(str).str.strip()
         df['etapa'] = df['etapa'].astype(str).str.strip()
         df['estado'] = df['estado'].astype(str).str.strip()
@@ -52,81 +48,91 @@ def procesar_archivo_plazos_detallado(file, dependencia):
         df['plazo'] = pd.to_numeric(df['plazo'], errors='coerce').fillna(0)
         df['dias'] = pd.to_numeric(df['dias'], errors='coerce').fillna(0)
         
-        # Normalizar caracteres especiales pero preservar ñ
-        def normalize_text(text):
-            if pd.isna(text):
-                return text
-            text = str(text)
-            # Normalizar caracteres pero preservar ñ
-            import unicodedata
-            # Normalizar a NFD para separar caracteres base de diacríticos
-            text = unicodedata.normalize('NFD', text)
-            # Reemplazar ñ normalizada por ñ simple
-            text = text.replace('\u0303n', 'ñ').replace('\u0303N', 'Ñ')
-            # Normalizar a NFC para recomponer caracteres
-            text = unicodedata.normalize('NFC', text)
-            return text.strip()
+        # Función para clasificar el estado del plazo
+        def clasificar_estado_plazo(color, dias_transcurridos, plazo_establecido):
+            if pd.isna(color) or color == '':
+                # Si no hay color, usar la lógica de días
+                if dias_transcurridos < plazo_establecido:
+                    return 'por_vencer'
+                else:
+                    return 'vencidos'
+            
+            color_lower = color.lower().strip()
+            if 'verde' in color_lower:
+                return 'dentro_plazo'
+            elif 'rojo' in color_lower:
+                return 'vencidos'
+            elif 'amarillo' in color_lower:
+                return 'por_vencer'
+            else:
+                # Si no reconoce el color, usar la lógica de días
+                if dias_transcurridos < plazo_establecido:
+                    return 'por_vencer'
+                else:
+                    return 'vencidos'
         
-        # Aplicar normalización a columnas de texto
-        df['fiscal'] = df['fiscal'].apply(normalize_text)
-        df['etapa'] = df['etapa'].apply(normalize_text)
-        df['estado'] = df['estado'].apply(normalize_text)
+        # Aplicar clasificación a cada fila
+        df['estado_plazo'] = df.apply(
+            lambda row: clasificar_estado_plazo(row['color'], row['dias'], row['plazo']), 
+            axis=1
+        )
         
         # Agrupar por fiscal, etapa y estado para contar casos
-        conteo_casos = df.groupby(['fiscal', 'etapa', 'estado']).size().reset_index(name='cantidad')
+        conteo_casos = df.groupby(['fiscal', 'etapa', 'estado', 'estado_plazo']).size().reset_index(name='cantidad')
+        
+        # Crear un diccionario para acumular los conteos
+        resultados = {}
         
         for _, row in conteo_casos.iterrows():
             fiscal = row['fiscal']
             etapa = row['etapa']
             estado = row['estado']
+            estado_plazo = row['estado_plazo']
             cantidad = row['cantidad']
             
-            # Filtrar datos para este fiscal, etapa y estado específicos
-            datos_filtrados = df[
-                (df['fiscal'] == fiscal) & 
-                (df['etapa'] == etapa) & 
-                (df['estado'] == estado)
-            ]
+            # Crear clave única para cada combinación
+            clave = (fiscal, etapa, estado)
             
-            # Calcular estadísticas de plazos
-            dentro_plazo = 0
-            por_vencer = 0
-            vencidos = 0
+            if clave not in resultados:
+                resultados[clave] = {
+                    'fiscal': fiscal,
+                    'etapa': etapa,
+                    'estado': estado,
+                    'dentro_plazo': 0,
+                    'por_vencer': 0,
+                    'vencidos': 0
+                }
             
-            for _, caso in datos_filtrados.iterrows():
-                dias_transcurridos = caso['dias']
-                plazo_establecido = caso['plazo']
-                color = caso['color']
-                
-                # Lógica para clasificar según el estado del plazo
-                if color == 'verde.jpg':
-                    # Caso dentro de plazo
-                    dentro_plazo += 1
-                elif color == 'rojo.jpg':
-                    # Caso vencido
-                    vencidos += 1
-                else:
-                    # Caso por vencer (amarillo o sin color específico)
-                    if dias_transcurridos < plazo_establecido:
-                        por_vencer += 1
-                    else:
-                        vencidos += 1
-            
+            # Acumular conteos según el estado del plazo
+            if estado_plazo == 'dentro_plazo':
+                resultados[clave]['dentro_plazo'] += cantidad
+            elif estado_plazo == 'por_vencer':
+                resultados[clave]['por_vencer'] += cantidad
+            elif estado_plazo == 'vencidos':
+                resultados[clave]['vencidos'] += cantidad
+        
+        # Crear registros en la base de datos
+        registros_creados = 0
+        for clave, datos in resultados.items():
             # Solo crear registro si hay casos
-            if dentro_plazo > 0 or por_vencer > 0 or vencidos > 0:
+            if datos['dentro_plazo'] > 0 or datos['por_vencer'] > 0 or datos['vencidos'] > 0:
                 PlazosDetalle.objects.create(
                     dependencia=dependencia,
-                    nombre_fiscal=fiscal,
-                    etapa=etapa,
-                    estado=estado,
-                    dentro_plazo=dentro_plazo,
-                    por_vencer=por_vencer,
-                    vencidos=vencidos
+                    nombre_fiscal=datos['fiscal'],
+                    etapa=datos['etapa'],
+                    estado=datos['estado'],
+                    dentro_plazo=datos['dentro_plazo'],
+                    por_vencer=datos['por_vencer'],
+                    vencidos=datos['vencidos']
                 )
+                registros_creados += 1
         
-        return True, 'Datos cargados correctamente.'
+        return True, f'Datos cargados correctamente. Se crearon {registros_creados} registros.'
     except Exception as e:
-        return False, str(e)
+        return False, f'Error en el procesamiento: {str(e)}'
+
+
+
 
 @transaction.atomic
 def procesar_archivo_plazos(file, dependencia):
