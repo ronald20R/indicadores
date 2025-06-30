@@ -1,3 +1,4 @@
+from typing import Any
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 
@@ -109,3 +110,16 @@ class CargaSiatf(models.Model):
         return self.dependencia
     
 
+class CargaAnio(models.Model):
+    dependencia = models.CharField(max_length=256)
+    nombre_fiscal =models.CharField(max_length=256)
+    resueltos = models.IntegerField(default=0)
+    tramites = models.IntegerField(default=0)
+    ingresados = models.IntegerField(default=0)
+    anio = models.IntegerField(verbose_name="Año")
+    fecha_creacion = models.DateField(auto_now_add=True)
+    fecha_modificacion = models.DateField(auto_now=True)
+
+    def __str__(self):  
+        return self.dependencia + " " + str(self.anio)
+    

@@ -10,8 +10,8 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser
 import pandas as pd
 
-from apps.modelos.models import Plazos, Carga, MateriaDelito, CargaTotal, TramitesMensual, CargaSiatf ,PlazosDetalle      
-from .serializers import PlazosCrearSerializer, CargaCrearSerializer, CargaTotalSerializer, CargaSiatfSerializer,PlazosDetalladoCrearSerializer
+from apps.modelos.models import Plazos, Carga, MateriaDelito, CargaTotal, TramitesMensual, CargaSiatf ,PlazosDetalle,CargaAnio      
+from .serializers import PlazosCrearSerializer, CargaCrearSerializer, CargaTotalSerializer, CargaSiatfSerializer,PlazosDetalladoCrearSerializer,CargaAnioCrearSerializer
 
 class CrearPlazosDetalleView(CreateAPIView):
     queryset = Plazos.objects.all()
@@ -443,7 +443,41 @@ class CrearCargaSiatfView(CreateAPIView):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+class CrearCargaAnioView(CreateAPIView):
+    queryset = CargaAnio.objects.all()
+    serializer_class = CargaAnioCrearSerializer
+    parser_classes = [MultiPartParser]
+    
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
 
+        file = serializer.validated_data['file']
+        dependencia = serializer.validated_data['dependencia']
+        anio = serializer.validated_data['anio']
+        try:
+            file.seek(0)
+            df = pd.read_excel(file)
+            df.columns = df.columns.str.strip().str.lower()
+
+            registros_creados = 0
+            for _, row in df.iterrows():
+                fiscal = str(row['fiscal']).strip()
+                resuelto = int(row['resuelto'])
+                tramite = int(row['tramite'])
+                ingresado = int(row['ingresado'])
+                CargaAnio.objects.create(
+                    dependencia=dependencia,
+                    nombre_fiscal=fiscal,
+                    resueltos=resuelto,
+                    tramites=tramite,
+                    ingresados=ingresado,
+                    anio=anio
+                )
+                registros_creados += 1
+            return Response({'mensaje': f'Datos cargados correctamente. Se crearon {registros_creados} registros.'}, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 

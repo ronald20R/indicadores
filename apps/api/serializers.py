@@ -22,6 +22,10 @@ class CargaTotalSerializer(serializers.Serializer):
 class CargaSiatfSerializer(serializers.Serializer):
     file = serializers.FileField()
     dependencia = serializers.CharField()
+class CargaAnioCrearSerializer(serializers.Serializer):
+    file = serializers.FileField()
+    dependencia = serializers.CharField()
+    anio = serializers.IntegerField()
 
 
 
