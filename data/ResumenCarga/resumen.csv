@@ -1,0 +1,9 @@
+id_fiscal,apell,nomb,pend,calif,preli,prepa,inter,juzga,deriv,archi,archicon,pnp,prov,acum,rpnp,asig,expe,iexpe,apel,impug,cons,excl,senten,quejas,ipre,sobreseim,sobreseimcon,acuerep,princoport,id_depen_mpub,id_esp,pdom,qpdom
+MAYRC,CAIRA YUCRA,ROLANDO,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,,,0,0
+MGYCQ,CHURATA QUISPE,YOVANA,0,0,3,4,3,5,1,9,14,0,1,0,0,76,0,0,32,0,0,0,3,0,0,1,0,0,0,,,0,0
+MGLRD,LAUREANO RICAPA,DELIA MARGOT,0,0,0,0,0,0,0,0,4,0,0,0,0,1797,38,13,1489,0,92,23,1,137,0,0,0,0,0,,,0,0
+MGLWR,LEON WARTHON,RONY,0,0,0,0,0,0,0,0,0,0,0,7,0,461,23,2,331,0,17,4,0,77,0,0,0,0,0,,,0,0
+MGMEM,MENACHO MEDINA,EDWARD,0,0,0,0,0,0,0,0,0,0,0,0,0,13,0,0,13,0,0,0,0,0,0,0,0,0,0,,,0,0
+MAPML,PEÑA MENDOZA,LUIS FERNANDO,0,0,0,0,0,0,1,0,4,0,0,0,0,1887,43,15,1557,0,76,16,0,175,0,0,0,0,0,,,0,0
+MARAP,RAMOS PACOMPIA,OCTAVIO,0,0,0,0,0,0,9,2,49,0,0,2,0,1202,38,19,810,0,140,19,0,112,0,0,0,0,0,,,0,0
+MGVCW,VILLALBA CALDERON,HECTOR WERLIN,0,0,1,0,0,1,5,5,53,0,0,1,0,917,5,17,706,0,43,13,2,65,0,0,0,0,0,,,0,0
