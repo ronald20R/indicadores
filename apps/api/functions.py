@@ -267,7 +267,8 @@ def procesar_carga_laboral(file, dependencia, mes, anio):
 
         # Columnas auxiliares para conteos binarios
         df_mes_actual['resuelto_bin'] = (df_mes_actual['condicion'] == 'RESUELTO').astype(int)
-        df_mes_actual['tramite_bin'] = (df_mes_actual['condicion'] == 'EN TRAMITE').astype(int)
+        #(registros_fiscal['condicion'] == 'EN TRAMITE')
+        df_mes_actual['tramite_bin'] = (df_mes_actual['condicion'].isin(['EN TRAMITE', 'INVESTIGACION PREVENTIVA'])).astype(int)
 
         # Agrupar y calcular agregados por fiscal
         conteo_fiscales = df_mes_actual.groupby('nombre_fiscal').agg(
@@ -311,7 +312,8 @@ def procesar_carga_laboral(file, dependencia, mes, anio):
                     ].shape[0]
 
                 casos_en_tramite = registros_fiscal[
-                    (registros_fiscal['condicion'] == 'EN TRAMITE') &
+                    #(registros_fiscal['condicion'] == 'EN TRAMITE') |
+                    (registros_fiscal['condicion'].isin(['EN TRAMITE', 'INVESTIGACION PREVENTIVA'])) &
                     (registros_fiscal['fecha_ingreso'] == dia)
                     ].shape[0]
 

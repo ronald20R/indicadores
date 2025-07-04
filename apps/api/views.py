@@ -9,6 +9,7 @@ from rest_framework.generics import CreateAPIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser
 import pandas as pd
+from django.db import transaction
 
 from apps.modelos.models import Plazos, Carga, MateriaDelito, CargaTotal, TramitesMensual, CargaSiatf ,PlazosDetalle,CargaAnio      
 from .serializers import PlazosCrearSerializer, CargaCrearSerializer, CargaTotalSerializer, CargaSiatfSerializer,PlazosDetalladoCrearSerializer,CargaAnioCrearSerializer
@@ -167,6 +168,7 @@ class CargarCargaLaboralView(CreateAPIView):
     serializer_class = CargaCrearSerializer
     queryset = Carga.objects.all()
 
+    @transaction.atomic
     def create(self, request, *args, **kwargs):
         locale.setlocale(locale.LC_TIME, 'es-ES')
         serializer = self.get_serializer(data=request.data)
@@ -174,14 +176,12 @@ class CargarCargaLaboralView(CreateAPIView):
 
         file = serializer.validated_data['file']
         dependencia = serializer.validated_data['dependencia']
-        mes = serializer.validated_data['mes']
-        anio = serializer.validated_data['anio']
+        mes = int(serializer.validated_data['mes'])
+        anio = int(serializer.validated_data['anio'])
 
         try:
-
             try:
-                df = pd.read_excel(file)
-
+                df = pd.read_excel(file, engine='xlrd')
             except Exception as e:
                 error_message = f"{str(e)}\n{traceback.format_exc()}"
                 return Response({'error': f'Error al leer Excel:\n{error_message}'}, status=status.HTTP_400_BAD_REQUEST)
@@ -213,8 +213,7 @@ class CargarCargaLaboralView(CreateAPIView):
 
             rangos = [
                 (inicio_mes.strftime('%B').upper(), inicio_mes.date(), (inicio_mes + pd.offsets.MonthEnd(0)).date()),
-                (mes_anterior.strftime('%B').upper(), mes_anterior.date(),
-                 (mes_anterior + pd.offsets.MonthEnd(0)).date())
+                (mes_anterior.strftime('%B').upper(), mes_anterior.date(), (mes_anterior + pd.offsets.MonthEnd(0)).date())
             ]
 
             df['fecha_ingreso'] = pd.to_datetime(df['fecha_ingreso'], dayfirst=True, errors='coerce').dt.date
@@ -225,6 +224,8 @@ class CargarCargaLaboralView(CreateAPIView):
             dias_mes = [inicio_mes + timedelta(days=i) for i in range((fin_mes - inicio_mes).days + 1)]
 
             fiscales = df['nombre_fiscal'].dropna().unique()
+
+            # Guardar conteo por materia delito para mes actual y anterior
             for label, inicio, fin in rangos:
                 df_filtrado = df[(df['fecha_ingreso'] >= inicio) & (df['fecha_ingreso'] <= fin)]
                 conteo = df_filtrado['materia_delito'].value_counts()
@@ -233,17 +234,41 @@ class CargarCargaLaboralView(CreateAPIView):
                         materia=materia,
                         cantidad=cantidad,
                         mes=label,
-                        dependencia = dependencia
+                        dependencia=dependencia
                     )
 
-            # Agrupar por fiscal solo del mes actual
-            df_mes_actual = df[(df['fecha_ingreso'] >= inicio_mes) & (df['fecha_ingreso'] <= fin_mes)]
-            df_mes_actual['estado'] = df_mes_actual['estado'].astype(str).str.strip().str.upper()
+            # Filtrar registros solo del mes actual
+            df_mes_actual = df[(df['fecha_ingreso'] >= inicio_mes) & (df['fecha_ingreso'] <= fin_mes)].copy()
 
+            df_mes_actual['fecha_ingreso_valida'] = pd.to_datetime(df_mes_actual['fecha_ingreso'], errors='coerce')
+
+            errores_ingreso = df_mes_actual[
+                df_mes_actual['fecha_ingreso'].notna() & df_mes_actual['fecha_ingreso_valida'].isna()]
+
+            for _, row in errores_ingreso.iterrows():
+                print(f"Error en fecha_ingreso: '{row['fecha_ingreso']}' del fiscal {row['nombre_fiscal']}")
+
+            # Asegurar fechas correctas
+            df_mes_actual['fecha_ingreso'] = pd.to_datetime(df_mes_actual['fecha_ingreso'], errors='coerce')
+            df_mes_actual['fecha_conclusion'] = pd.to_datetime(df_mes_actual['fecha_conclusion'], errors='coerce')
+
+            # Limpieza de 'estado' y 'condicion'
+            df_mes_actual['estado'] = df_mes_actual['estado'].astype(str).str.strip().str.upper()
+            df_mes_actual['condicion'] = df_mes_actual['condicion'].astype(str).str.strip().str.upper()
+
+            # Reemplazar NaT por None para evitar problemas
+            df_mes_actual['fecha_ingreso'] = df_mes_actual['fecha_ingreso'].where(df_mes_actual['fecha_ingreso'].notna(), None)
+            df_mes_actual['fecha_conclusion'] = df_mes_actual['fecha_conclusion'].where(df_mes_actual['fecha_conclusion'].notna(), None)
+
+            # Columnas auxiliares para conteos binarios
+            df_mes_actual['resuelto_bin'] = (df_mes_actual['condicion'] == 'RESUELTO').astype(int)
+            df_mes_actual['tramite_bin'] = (df_mes_actual['condicion'].isin(['EN TRAMITE', 'INVESTIGACION PREVENTIVA'])).astype(int)
+
+            # Agrupar y calcular agregados por fiscal
             conteo_fiscales = df_mes_actual.groupby('nombre_fiscal').agg(
                 total_tramite=('estado', 'count'),
-                resuelto_mes=('estado', lambda x: (x=='RESUELTO').sum()),
-                tramite_mes=('estado', lambda x: (x=='EN TRAMITE').sum()),
+                resuelto_mes=('resuelto_bin', 'sum'),
+                tramite_mes=('tramite_bin', 'sum'),
                 fecha_ingreso=('fecha_ingreso', 'min'),
                 fecha_conclusion=('fecha_conclusion', 'max'),
             ).reset_index()
@@ -256,17 +281,15 @@ class CargarCargaLaboralView(CreateAPIView):
                     nombre_fiscal=row['nombre_fiscal'],
                     mes=nombre_mes,
                     defaults={
-                        'fecha_ingreso': row['fecha_ingreso'],
-                        'fecha_conclusion': row['fecha_conclusion'],
                         'total_tramite': row['total_tramite'],
                         'tramite_mes': row['tramite_mes'],
                         'resuelto_mes': row['resuelto_mes'],
                     }
                 )
 
+            # Crear registros diarios
             for fiscal in fiscales:
                 registros_fiscal = df[df['nombre_fiscal'] == fiscal]
-
                 for dia in dias_mes:
                     casos_resueltos = registros_fiscal[
                         (registros_fiscal['condicion'] == 'RESUELTO') &
@@ -278,7 +301,7 @@ class CargarCargaLaboralView(CreateAPIView):
                         ].shape[0]
 
                     casos_en_tramite = registros_fiscal[
-                        (registros_fiscal['condicion'] == 'EN TRAMITE') &
+                        (registros_fiscal['condicion'].isin(['EN TRAMITE', 'INVESTIGACION PREVENTIVA'])) &
                         (registros_fiscal['fecha_ingreso'] == dia)
                         ].shape[0]
 
@@ -301,18 +324,19 @@ class CargarCargaLaboralView(CreateAPIView):
                         (registros_fiscal['estado'] == 'CON SENTENCIA') &
                         (registros_fiscal['fecha_conclusion'] == dia)
                         ].shape[0]
+                    fecha_dia = dia if pd.notnull(dia) else None
+
                     if any([
                         casos_resueltos, casos_ingresados, casos_en_tramite,
                         archivos_preliminar, archivo_califica, archivos_consentidos, sentencias
                     ]):
-                        # Crear registro
                         Carga.objects.create(
                             nombre_fiscal=fiscal,
                             casos_resueltos=casos_resueltos,
                             casos_ingresados=casos_ingresados,
                             casos_en_tramite=casos_en_tramite,
                             dependencia=dependencia,
-                            fecha=dia,
+                            fecha=fecha_dia,
                             sentencias=sentencias,
                             archivos_consentidos=archivos_consentidos,
                             archivo_califica=archivo_califica,
@@ -322,6 +346,8 @@ class CargarCargaLaboralView(CreateAPIView):
             return Response({'mensaje': 'Carga laboral del mes procesada correctamente.'}, status=status.HTTP_201_CREATED)
 
         except Exception as e:
+            print("Error general:", e)
+            print(traceback.format_exc())
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
